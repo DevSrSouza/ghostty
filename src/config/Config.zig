@@ -376,7 +376,10 @@ language: ?[:0]const u8 = null,
 /// Additionally, custom shaders will receive colors in the configured space.
 ///
 /// On macOS the default is `native`, on all other platforms the default is
-/// `linear-corrected`.
+/// `linear-corrected`. On Android the default is also `native`: the OpenGL ES
+/// renderer draws to a non-sRGB default framebuffer (ES core has no
+/// `GL_FRAMEBUFFER_SRGB`), so linear output would render far too dark; `native`
+/// makes the shader encode to sRGB itself.
 ///
 /// Valid values:
 ///
@@ -395,7 +398,7 @@ language: ?[:0]const u8 = null,
 ///
 /// Available since: 1.1.0
 @"alpha-blending": AlphaBlending =
-    if (builtin.os.tag == .macos)
+    if (builtin.os.tag == .macos or builtin.target.abi.isAndroid())
         .native
     else
         .@"linear-corrected",

@@ -330,6 +330,11 @@ fn eglThreadEnter(surface: *apprt.Surface) !void {
 
     const window: egl.EGLNativeWindowType =
         @ptrCast(surface.platform.opengl.native_window);
+    // Note: we deliberately do NOT request an sRGB EGL surface. ES core has no
+    // GL_FRAMEBUFFER_SRGB, so the renderer instead uses `native` alpha blending
+    // on Android (see Config), where the shader unlinearizes color to sRGB
+    // itself before writing to this plain framebuffer. Requesting an sRGB
+    // surface on top of that would double-encode and wash the colors out.
     const surf = egl.eglCreateWindowSurface(display, config, window, null);
     if (surf == egl.EGL_NO_SURFACE) {
         eglLog("eglCreateWindowSurface");
