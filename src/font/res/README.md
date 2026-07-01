@@ -4,8 +4,12 @@ This project uses several fonts which fall under the SIL Open Font License (OFL-
 
 - Code New Roman (OFL-1.1)
   - [© 2014 Sam Radian. All Rights Reserved.](https://github.com/chrissimpkins/codeface/blob/master/fonts/code-new-roman/license.txt)
+- Fira Code (OFL-1.1)
+  - [Copyright 2014, The Fira Code Project Authors (https://github.com/tonsky/FiraCode)](https://github.com/tonsky/FiraCode/blob/master/LICENSE)
 - Geist Mono (OFL-1.1)
   - [Copyright (c) 2023 Vercel, in collaboration with basement.studio](https://github.com/vercel/geist-font/blob/main/LICENSE.txt)
+- Hack (MIT + Bitstream Vera)
+  - [Copyright (c) 2018 Source Foundry Authors](https://github.com/source-foundry/Hack/blob/master/LICENSE.md)
 - Inconsolata (OFL-1.1)
   - [Copyright 2006 The Inconsolata Project Authors](https://github.com/google/fonts/blob/main/ofl/inconsolata/OFL.txt)
 - JetBrains Mono (OFL-1.1)

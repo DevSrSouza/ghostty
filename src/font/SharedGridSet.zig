@@ -250,6 +250,29 @@ fn collection(
         }
     }
 
+    // Android has no font discovery, so resolve the configured families
+    // against the embedded faces instead — otherwise `font-family` would be
+    // silently ignored and everything would render with the built-in
+    // fallback. Regular only; completeStyles below synthesizes the rest.
+    if (comptime builtin.target.abi.isAndroid()) {
+        for (key.descriptorsForStyle(.regular)) |desc| {
+            const name = desc.family orelse continue;
+            const data = font.embedded.family(name) orelse {
+                log.warn("font-family not embedded: {s}", .{name});
+                continue;
+            };
+            _ = try c.add(
+                self.alloc,
+                try .init(self.font_lib, data, load_options.faceOptions()),
+                .{
+                    .style = .regular,
+                    .fallback = false,
+                    .size_adjustment = .none,
+                },
+            );
+        }
+    }
+
     // Complete our styles to ensure we have something to satisfy every
     // possible style request. We do this before adding our built-in font
     // because we want to ensure our built-in styles are fallbacks to

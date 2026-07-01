@@ -5,12 +5,36 @@
 //! Be careful to ensure that any fonts you embed are licensed for
 //! redistribution and include their license as necessary.
 
+const std = @import("std");
+
 /// Default fonts that we prefer for Ghostty.
 pub const variable = @embedFile("jetbrains_mono_variable");
 pub const variable_italic = @embedFile("jetbrains_mono_variable_italic");
 
 /// Symbols-only nerd font.
 pub const symbols_nerd_font = @embedFile("nerd_fonts_symbols_only");
+
+/// Families resolvable by name via `family` on builds without font
+/// discovery (Android). Only referenced there, so other builds don't
+/// embed the extra fonts.
+pub const fira_code = @embedFile("res/FiraCode-Regular.ttf");
+pub const hack = @embedFile("res/Hack-Regular.ttf");
+
+/// Resolve a `font-family` name against the embedded faces. Used when the
+/// build has no font discovery, where a configured family would otherwise
+/// be silently ignored.
+pub fn family(name: []const u8) ?[:0]const u8 {
+    const map: []const struct { []const u8, [:0]const u8 } = &.{
+        .{ "JetBrains Mono", variable },
+        .{ "Fira Code", fira_code },
+        .{ "Hack", hack },
+        .{ "Geist Mono", geist_mono },
+    };
+    for (map) |entry| {
+        if (std.ascii.eqlIgnoreCase(entry[0], name)) return entry[1];
+    }
+    return null;
+}
 
 /// Static jetbrains mono faces, currently unused.
 pub const regular = @embedFile("jetbrains_mono_regular");
