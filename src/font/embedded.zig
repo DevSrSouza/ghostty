@@ -20,6 +20,11 @@ pub const symbols_nerd_font = @embedFile("nerd_fonts_symbols_only");
 pub const fira_code = @embedFile("res/FiraCode-Regular.ttf");
 pub const hack = @embedFile("res/Hack-Regular.ttf");
 
+/// Full Noto Sans Symbols 2, used as a fallback on Android where the
+/// system only ships subsetted symbol fonts (missing e.g. the U+23Ex/23Fx
+/// media-control symbols common in terminal UIs).
+pub const symbols2 = @embedFile("res/NotoSansSymbols2-Regular.ttf");
+
 /// Resolve a `font-family` name against the embedded faces. Used when the
 /// build has no font discovery, where a configured family would otherwise
 /// be silently ignored.

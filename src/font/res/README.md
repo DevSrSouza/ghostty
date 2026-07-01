@@ -27,6 +27,8 @@ This project uses several fonts which fall under the SIL Open Font License (OFL-
     with Reserved Font Name "Monaspace", including subfamilies: "Argon", "Neon", "Xenon", "Radon", and "Krypton"](https://github.com/githubnext/monaspace/blob/main/LICENSE)
 - Noto Emoji (OFL-1.1)
   - [Copyright 2013 Google LLC](https://github.com/googlefonts/noto-emoji/blob/main/LICENSE)
+- Noto Sans Symbols 2 (OFL-1.1)
+  - [Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)](https://github.com/notofonts/symbols/blob/main/OFL.txt)
 - Cozette (MIT)
   - [Copyright (c) 2020, Slavfox](https://github.com/slavfox/Cozette/blob/main/LICENSE)
 - Terminus TTF (OFL-1.1)

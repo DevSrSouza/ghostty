@@ -12,6 +12,7 @@
 const CodepointResolver = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const uucode = @import("uucode");
 const font = @import("main.zig");
@@ -218,6 +219,14 @@ pub fn getIndex(
         }
     }
 
+    // Android has no font discovery, so scan the system fonts for scripts
+    // we don't embed (CJK, Arabic, Thai, ...). A found face joins the
+    // collection, and results — including misses — are cached above us
+    // (SharedGrid), so each codepoint triggers at most one scan per grid.
+    if (style == .regular and comptime builtin.target.abi.isAndroid()) {
+        if (self.androidSystemFont(alloc, cp, p_mode)) |value| return value;
+    }
+
     // If this is regular with any matching presentation, then we are done
     // there is nothing more we can do. Otherwise we fall through and do
     // an any presentation search.
@@ -225,6 +234,73 @@ pub fn getIndex(
 
     // For non-regular fonts, we fall back to regular with any presentation
     return self.collection.getIndex(cp, .regular, .{ .any = {} });
+}
+
+/// Search /system/fonts for a face containing the codepoint and add it to
+/// the collection. Files with "Regular" in the name are tried first so a
+/// styled variant doesn't win over its regular sibling by iteration order.
+fn androidSystemFont(
+    self: *CodepointResolver,
+    alloc: Allocator,
+    cp: u32,
+    p_mode: Collection.PresentationMode,
+) ?Collection.Index {
+    const load_opts = self.collection.load_options orelse return null;
+    var dir = std.fs.openDirAbsolute(
+        "/system/fonts",
+        .{ .iterate = true },
+    ) catch return null;
+    defer dir.close();
+
+    for ([2]bool{ true, false }) |regular_pass| {
+        var it = dir.iterate();
+        while (it.next() catch return null) |dir_entry| {
+            if (dir_entry.kind != .file) continue;
+            const is_regular = std.mem.indexOf(u8, dir_entry.name, "Regular") != null;
+            if (is_regular != regular_pass) continue;
+            const ext = std.fs.path.extension(dir_entry.name);
+            if (!std.mem.eql(u8, ext, ".ttf") and
+                !std.mem.eql(u8, ext, ".otf") and
+                !std.mem.eql(u8, ext, ".ttc")) continue;
+
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const path = std.fmt.bufPrintZ(
+                &path_buf,
+                "/system/fonts/{s}",
+                .{dir_entry.name},
+            ) catch continue;
+
+            var face = Face.initFile(
+                load_opts.library,
+                path,
+                0,
+                load_opts.faceOptions(),
+            ) catch continue;
+            const entry: Collection.Entry = .{
+                .face = .{ .loaded = face },
+                .fallback = true,
+            };
+            if (!entry.hasCodepoint(cp, p_mode)) {
+                face.deinit();
+                continue;
+            }
+
+            log.info("found codepoint 0x{X} in system font={s}", .{
+                cp,
+                dir_entry.name,
+            });
+            return self.collection.add(alloc, face, .{
+                .style = .regular,
+                .fallback = true,
+                .size_adjustment = font.default_fallback_adjustment,
+            }) catch {
+                face.deinit();
+                return null;
+            };
+        }
+    }
+
+    return null;
 }
 
 /// Checks if the codepoint is in the map of codepoint overrides,
