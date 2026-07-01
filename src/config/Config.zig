@@ -3852,6 +3852,16 @@ pub fn loadIter(
     try cli.args.parse(Config, alloc, self, iter);
 }
 
+/// Load configuration from an in-memory string of newline-separated
+/// `key = value` entries (the same syntax as a config file). Used by the C API
+/// to push values (e.g. theme colors) without a file on disk. Paths are not
+/// expanded, so file-valued options should not be set this way.
+pub fn loadString(self: *Config, alloc: Allocator, str: []const u8) !void {
+    var reader: std.Io.Reader = .fixed(str);
+    var iter: cli.args.LineIterator = .{ .r = &reader, .filepath = "<string>" };
+    try self.loadIter(alloc, &iter);
+}
+
 /// Load configuration from the target config file at `path`.
 ///
 /// `path` must be resolved and absolute.

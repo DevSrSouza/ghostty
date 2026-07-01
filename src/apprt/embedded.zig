@@ -15,6 +15,7 @@ const input = @import("../input.zig");
 const internal_os = @import("../os/main.zig");
 const renderer = @import("../renderer.zig");
 const terminal = @import("../terminal/main.zig");
+const termio = @import("../termio.zig");
 const CoreApp = @import("../App.zig");
 const CoreInspector = @import("../inspector/main.zig").Inspector;
 const CoreSurface = @import("../Surface.zig");
@@ -443,6 +444,10 @@ pub const Surface = struct {
     cursor_pos: apprt.CursorPos,
     inspector: ?*Inspector = null,
 
+    /// External I/O configuration (see Options.io_mode / write_callback).
+    io_mode: c_int = 0,
+    write_callback: ?termio.Passive.WriteCallback = null,
+
     /// The current title of the surface. The embedded apprt saves this so
     /// that getTitle works without the implementer needing to save it.
     title: ?[:0]const u8 = null,
@@ -488,6 +493,18 @@ pub const Surface = struct {
 
         /// Context for the new surface
         context: apprt.surface.NewSurfaceContext = .window,
+
+        /// I/O mode. 0 = exec (spawn a subprocess with a pty, the default).
+        /// 1 = external: no subprocess/pty, the host feeds bytes in via
+        /// `ghostty_surface_write` and receives encoded input via
+        /// `write_callback`. Used to render a terminal whose I/O the host owns.
+        io_mode: c_int = 0,
+
+        /// In external I/O mode, the callback invoked with bytes the terminal
+        /// wants to send to the pty (encoded keystrokes). The host must copy
+        /// the bytes synchronously; they are invalid after the call returns.
+        /// `userdata` is passed as the first argument.
+        write_callback: ?termio.Passive.WriteCallback = null,
     };
 
     pub fn init(self: *Surface, app: *App, opts: Options) !void {
@@ -502,6 +519,8 @@ pub const Surface = struct {
             },
             .size = .{ .width = 800, .height = 600 },
             .cursor_pos = .{ .x = -1, .y = -1 },
+            .io_mode = opts.io_mode,
+            .write_callback = opts.write_callback,
         };
 
         // Add ourselves to the list of surfaces on the app.
@@ -973,6 +992,17 @@ pub const Surface = struct {
             .font_size = font_size,
             .working_directory = working_directory,
             .context = context,
+        };
+    }
+
+    /// If external I/O mode is requested, returns the passive backend config
+    /// (the core surface uses this to skip spawning a subprocess). Returns null
+    /// for the default exec path.
+    pub fn externalIo(self: *const Surface) ?termio.Passive.Config {
+        if (self.io_mode == 0) return null;
+        return .{
+            .write_callback = self.write_callback,
+            .userdata = self.userdata,
         };
     }
 
@@ -1844,6 +1874,19 @@ pub const CAPI = struct {
         len: usize,
     ) void {
         surface.textCallback(ptr[0..len]);
+    }
+
+    /// Feed raw bytes into the terminal's VT stream, exactly as if they had
+    /// arrived from a pty. Intended for external I/O mode (see io_mode) where
+    /// the host owns the byte stream. This locks the renderer state and
+    /// schedules a render, so it is safe to call from a dedicated feed thread;
+    /// the host must serialize its own writes.
+    export fn ghostty_surface_write(
+        surface: *Surface,
+        ptr: [*]const u8,
+        len: usize,
+    ) void {
+        surface.core_surface.io.processOutput(ptr[0..len]);
     }
 
     /// Set the preedit text for the surface. This is used for IME

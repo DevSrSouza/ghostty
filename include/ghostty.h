@@ -456,6 +456,12 @@ typedef struct {
   const char* initial_input;
   bool wait_after_command;
   ghostty_surface_context_e context;
+  // I/O mode: 0 = exec (spawn a pty subprocess, default), 1 = external (no
+  // pty; feed bytes via ghostty_surface_write, receive input via write_callback).
+  int io_mode;
+  // In external I/O mode, receives bytes the terminal wants to send to the pty.
+  // The host must copy synchronously; userdata is passed as the first argument.
+  void (*write_callback)(void*, const char*, uintptr_t);
 } ghostty_surface_config_s;
 
 typedef struct {
@@ -1048,6 +1054,7 @@ ghostty_config_t ghostty_config_new();
 void ghostty_config_free(ghostty_config_t);
 ghostty_config_t ghostty_config_clone(ghostty_config_t);
 void ghostty_config_load_cli_args(ghostty_config_t);
+void ghostty_config_load_string(ghostty_config_t, const char*, uintptr_t);
 void ghostty_config_load_file(ghostty_config_t, const char*);
 void ghostty_config_load_default_files(ghostty_config_t);
 void ghostty_config_load_recursive_files(ghostty_config_t);
@@ -1102,6 +1109,7 @@ bool ghostty_surface_key_is_binding(ghostty_surface_t,
                                     ghostty_input_key_s,
                                     ghostty_binding_flags_e*);
 void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
+void ghostty_surface_write(ghostty_surface_t, const char*, uintptr_t);
 void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
 bool ghostty_surface_mouse_captured(ghostty_surface_t);
 bool ghostty_surface_mouse_button(ghostty_surface_t,

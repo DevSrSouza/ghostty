@@ -616,10 +616,33 @@ pub fn init(
         break :command config.command;
     };
 
+    // If the apprt requests external IO (host owns the byte stream, no pty),
+    // we use the passive backend. Otherwise we spawn a subprocess via exec.
+    const external_io: ?termio.Passive.Config = if (comptime @hasDecl(
+        @TypeOf(rt_surface.*),
+        "externalIo",
+    )) rt_surface.externalIo() else null;
+
     // Start our IO implementation
     // This separate block ({}) is important because our errdefers must
     // be scoped here to be valid.
-    {
+    if (external_io) |passive_config| {
+        // Initialize our IO mailbox
+        var io_mailbox = try termio.Mailbox.initSPSC(alloc);
+        errdefer io_mailbox.deinit(alloc);
+
+        try termio.Termio.init(&self.io, alloc, .{
+            .size = size,
+            .full_config = config,
+            .config = try termio.Termio.DerivedConfig.init(alloc, config),
+            .backend = .{ .passive = try termio.Passive.init(alloc, passive_config) },
+            .mailbox = io_mailbox,
+            .renderer_state = &self.renderer_state,
+            .renderer_wakeup = render_thread.wakeup,
+            .renderer_mailbox = render_thread.mailbox,
+            .surface_mailbox = .{ .surface = self, .app = app_mailbox },
+        });
+    } else {
         var env = rt_surface.defaultTermioEnv() catch |err| env: {
             // If an error occurs, we don't want to block surface startup.
             log.warn("error getting env map for surface err={}", .{err});
@@ -1291,6 +1314,8 @@ fn childExitedAbnormally(
     // Build up our command for the error message
     const command = try std.mem.join(alloc, " ", switch (self.io.backend) {
         .exec => |*exec| exec.subprocess.args,
+        // Passive backends have no child process, so this is never reached.
+        .passive => unreachable,
     });
     const runtime_str = try std.fmt.allocPrint(alloc, "{d} ms", .{info.runtime_ms});
 

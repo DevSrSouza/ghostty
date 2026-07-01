@@ -65,6 +65,15 @@ export fn ghostty_config_load_default_files(self: *Config) void {
     };
 }
 
+/// Load configuration from an in-memory string of newline-separated
+/// `key = value` entries (same syntax as a config file). Useful for pushing
+/// values such as theme colors from the host without a file on disk.
+export fn ghostty_config_load_string(self: *Config, ptr: [*]const u8, len: usize) void {
+    self.loadString(state.alloc, ptr[0..len]) catch |err| {
+        log.err("error loading config from string err={}", .{err});
+    };
+}
+
 /// Load the configuration from a specific file path.
 /// The path must be null-terminated.
 export fn ghostty_config_load_file(self: *Config, path: [*:0]const u8) void {
