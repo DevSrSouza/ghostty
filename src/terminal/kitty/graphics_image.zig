@@ -121,6 +121,12 @@ pub const LoadingImage = struct {
             return error.UnsupportedMedium;
         }
 
+        // Android's bionic has no POSIX shm_open/shm_unlink, so the
+        // shared-memory image medium is unsupported there.
+        if (comptime builtin.target.abi.isAndroid()) {
+            return error.UnsupportedMedium;
+        }
+
         // Since we're only supporting posix then max_path_bytes should
         // be enough to stack allocate the path.
         var buf: [std.fs.max_path_bytes]u8 = undefined;

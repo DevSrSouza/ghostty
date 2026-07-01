@@ -260,44 +260,50 @@ pub fn add(
         }
     }
 
-    // Glslang
-    if (b.lazyDependency("glslang", .{
-        .target = target,
-        .optimize = optimize,
-    })) |glslang_dep| {
-        step.root_module.addImport("glslang", glslang_dep.module("glslang"));
-        if (b.systemIntegrationOption("glslang", .{})) {
-            step.linkSystemLibrary2("glslang", dynamic_link_opts);
-            step.linkSystemLibrary2(
-                "glslang-default-resource-limits",
-                dynamic_link_opts,
-            );
-        } else {
-            step.linkLibrary(glslang_dep.artifact("glslang"));
-            try static_libs.append(
-                b.allocator,
-                glslang_dep.artifact("glslang").getEmittedBin(),
-            );
+    // Glslang. Not supported on Android: it's only needed for custom
+    // (shadertoy) shader transpilation and does not cross-compile against
+    // the bionic libc++.
+    if (!target.result.abi.isAndroid()) {
+        if (b.lazyDependency("glslang", .{
+            .target = target,
+            .optimize = optimize,
+        })) |glslang_dep| {
+            step.root_module.addImport("glslang", glslang_dep.module("glslang"));
+            if (b.systemIntegrationOption("glslang", .{})) {
+                step.linkSystemLibrary2("glslang", dynamic_link_opts);
+                step.linkSystemLibrary2(
+                    "glslang-default-resource-limits",
+                    dynamic_link_opts,
+                );
+            } else {
+                step.linkLibrary(glslang_dep.artifact("glslang"));
+                try static_libs.append(
+                    b.allocator,
+                    glslang_dep.artifact("glslang").getEmittedBin(),
+                );
+            }
         }
     }
 
-    // Spirv-cross
-    if (b.lazyDependency("spirv_cross", .{
-        .target = target,
-        .optimize = optimize,
-    })) |spirv_cross_dep| {
-        step.root_module.addImport(
-            "spirv_cross",
-            spirv_cross_dep.module("spirv_cross"),
-        );
-        if (b.systemIntegrationOption("spirv-cross", .{})) {
-            step.linkSystemLibrary2("spirv-cross-c-shared", dynamic_link_opts);
-        } else {
-            step.linkLibrary(spirv_cross_dep.artifact("spirv_cross"));
-            try static_libs.append(
-                b.allocator,
-                spirv_cross_dep.artifact("spirv_cross").getEmittedBin(),
+    // Spirv-cross. Not supported on Android (see glslang above).
+    if (!target.result.abi.isAndroid()) {
+        if (b.lazyDependency("spirv_cross", .{
+            .target = target,
+            .optimize = optimize,
+        })) |spirv_cross_dep| {
+            step.root_module.addImport(
+                "spirv_cross",
+                spirv_cross_dep.module("spirv_cross"),
             );
+            if (b.systemIntegrationOption("spirv-cross", .{})) {
+                step.linkSystemLibrary2("spirv-cross-c-shared", dynamic_link_opts);
+            } else {
+                step.linkLibrary(spirv_cross_dep.artifact("spirv_cross"));
+                try static_libs.append(
+                    b.allocator,
+                    spirv_cross_dep.artifact("spirv_cross").getEmittedBin(),
+                );
+            }
         }
     }
 
@@ -366,6 +372,16 @@ pub fn add(
 
     // C files
     step.linkLibC();
+
+    // Android needs EGL (for the GLES renderer's context bring-up) and
+    // the native app glue library (for the ANativeWindow surface). The
+    // NDK lib search path is provided by `android_ndk.addPaths`.
+    if (target.result.abi.isAndroid()) {
+        step.linkSystemLibrary("EGL");
+        step.linkSystemLibrary("android");
+        step.linkSystemLibrary("log");
+    }
+
     step.addIncludePath(b.path("src/stb"));
     step.addCSourceFiles(.{ .files = &.{"src/stb/stb.c"} });
     if (step.rootModuleTarget().os.tag == .linux) {
@@ -470,23 +486,27 @@ pub fn add(
         }
     }
 
-    // cimgui
-    if (b.lazyDependency("dcimgui", .{
-        .target = target,
-        .optimize = optimize,
-        .freetype = true,
-        .@"backend-metal" = target.result.os.tag.isDarwin(),
-        .@"backend-osx" = target.result.os.tag == .macos,
-        // OpenGL3 backend should only be built on non-Apple targets.
-        // Apple platforms use Metal (and macOS may also use the OSX backend).
-        .@"backend-opengl3" = !target.result.os.tag.isDarwin(),
-    })) |dep| {
-        step.root_module.addImport("dcimgui", dep.module("dcimgui"));
-        step.linkLibrary(dep.artifact("dcimgui"));
-        try static_libs.append(
-            b.allocator,
-            dep.artifact("dcimgui").getEmittedBin(),
-        );
+    // cimgui. Not supported on Android: it's only used by the debug
+    // inspector overlay and does not cross-compile against the bionic
+    // libc++.
+    if (!target.result.abi.isAndroid()) {
+        if (b.lazyDependency("dcimgui", .{
+            .target = target,
+            .optimize = optimize,
+            .freetype = true,
+            .@"backend-metal" = target.result.os.tag.isDarwin(),
+            .@"backend-osx" = target.result.os.tag == .macos,
+            // OpenGL3 backend should only be built on non-Apple targets.
+            // Apple platforms use Metal (and macOS may also use the OSX backend).
+            .@"backend-opengl3" = !target.result.os.tag.isDarwin(),
+        })) |dep| {
+            step.root_module.addImport("dcimgui", dep.module("dcimgui"));
+            step.linkLibrary(dep.artifact("dcimgui"));
+            try static_libs.append(
+                b.allocator,
+                dep.artifact("dcimgui").getEmittedBin(),
+            );
+        }
     }
 
     // Fonts
@@ -526,6 +546,17 @@ pub fn add(
                 .{ .root_source_file = nf_symbols.path("SymbolsNerdFont-Regular.ttf") },
             );
         }
+    }
+
+    // libghostty on Android renders with OpenGL ES, so the lib itself needs
+    // glad statically compiled in (the exe path below does this for GTK; the
+    // macOS lib uses Metal and needs none).
+    if (step.kind == .lib and target.result.abi.isAndroid()) {
+        step.addIncludePath(b.path("vendor/glad/include/"));
+        step.addCSourceFile(.{
+            .file = b.path("vendor/glad/src/gl.c"),
+            .flags = &.{},
+        });
     }
 
     // If we're building an exe then we have additional dependencies.

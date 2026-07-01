@@ -36,7 +36,7 @@ flat out float opacity;
 flat out uint repeat;
 
 void main() {
-    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0;
+    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0u;
 
     vec4 position;
     position.x = (gl_VertexID == 2) ? 3.0 : -1.0;
@@ -64,7 +64,7 @@ void main() {
     repeat = info & BG_IMAGE_REPEAT;
 
     vec2 screen_size = screen_size;
-    vec2 tex_size = textureSize(image, 0);
+    vec2 tex_size = vec2(textureSize(image, 0));
 
     vec2 dest_size = tex_size;
     switch (info & BG_IMAGE_FIT) {

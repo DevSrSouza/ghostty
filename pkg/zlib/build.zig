@@ -17,6 +17,9 @@ pub fn build(b: *std.Build) !void {
         const apple_sdk = @import("apple_sdk");
         try apple_sdk.addPaths(b, lib);
     }
+    if (target.result.abi.isAndroid()) {
+        try @import("android_ndk").addPaths(b, lib);
+    }
 
     if (b.lazyDependency("zlib", .{})) |upstream| {
         lib.addIncludePath(upstream.path(""));

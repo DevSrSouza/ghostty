@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const cimgui = @import("dcimgui");
@@ -702,7 +703,9 @@ const VTHandler = struct {
 
     /// Exclude certain actions by tag.
     filter_exclude: ActionTagSet,
-    filter_text: cimgui.c.ImGuiTextFilter,
+    // cimgui is unavailable on Android; the inspector UI is disabled there,
+    // so this field is only a placeholder to keep the layout valid.
+    filter_text: if (builtin.target.abi.isAndroid()) struct {} else cimgui.c.ImGuiTextFilter,
 
     const Stream = terminal.Stream(VTHandler);
 
@@ -774,10 +777,13 @@ const VTHandler = struct {
         ev.seq = self.current_seq;
         errdefer ev.deinit(alloc);
 
-        // Check if the event passes the filter
-        if (!ev.passFilter(&self.filter_text)) {
-            ev.deinit(alloc);
-            return true;
+        // Check if the event passes the filter. The filter is a cimgui
+        // widget which is unavailable on Android, so there we record all.
+        if (comptime !builtin.target.abi.isAndroid()) {
+            if (!ev.passFilter(&self.filter_text)) {
+                ev.deinit(alloc);
+                return true;
+            }
         }
 
         const max_capacity = 100;

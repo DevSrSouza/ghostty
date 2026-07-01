@@ -112,12 +112,30 @@ pub fn main() !MainReturn {
 }
 
 // The function std.log will call.
+const android_log = if (builtin.target.abi.isAndroid()) @cImport({
+    @cInclude("android/log.h");
+}) else struct {};
+
 fn logFn(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.EnumLiteral),
     comptime format: []const u8,
     args: anytype,
 ) void {
+    // On Android, route logs to logcat (stderr isn't captured there).
+    if (comptime builtin.target.abi.isAndroid()) {
+        const prio: c_int = switch (level) {
+            .debug => android_log.ANDROID_LOG_DEBUG,
+            .info => android_log.ANDROID_LOG_INFO,
+            .warn => android_log.ANDROID_LOG_WARN,
+            .err => android_log.ANDROID_LOG_ERROR,
+        };
+        const prefix = if (scope == .default) "" else "(" ++ @tagName(scope) ++ ") ";
+        var buf: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrintZ(&buf, prefix ++ format, args) catch return;
+        _ = android_log.__android_log_write(prio, "Ghostty", msg.ptr);
+        return;
+    }
     // On Mac, we use unified logging. To view this:
     //
     //   sudo log stream --level debug --predicate 'subsystem=="com.mitchellh.ghostty"'

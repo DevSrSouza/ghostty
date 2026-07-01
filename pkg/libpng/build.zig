@@ -13,12 +13,18 @@ pub fn build(b: *std.Build) !void {
         .linkage = .static,
     });
     lib.linkLibC();
-    if (target.result.os.tag == .linux) {
+    // On Android, libm is part of bionic libc and is resolved at the final
+    // link; linking the NDK's static libm.a here bundles it into this
+    // archive and breaks the downstream shared-object link.
+    if (target.result.os.tag == .linux and !target.result.abi.isAndroid()) {
         lib.linkSystemLibrary("m");
     }
     if (target.result.os.tag.isDarwin()) {
         const apple_sdk = @import("apple_sdk");
         try apple_sdk.addPaths(b, lib);
+    }
+    if (target.result.abi.isAndroid()) {
+        try @import("android_ndk").addPaths(b, lib);
     }
 
     // For dynamic linking, we prefer dynamic linking and to search by

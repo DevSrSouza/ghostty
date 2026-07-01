@@ -3,6 +3,10 @@ const Allocator = std.mem.Allocator;
 const assert = @import("../../quirks.zig").inlineAssert;
 const math = @import("../../math.zig");
 
+/// True when targeting Android, in which case we render with OpenGL ES 3.1
+/// and must transform the desktop GLSL sources into GLSL ES at load time.
+const gles = @import("builtin").target.abi.isAndroid();
+
 const Pipeline = @import("Pipeline.zig");
 
 const log = std.log.scoped(.opengl);
@@ -345,7 +349,112 @@ fn initPostPipeline(data: [:0]const u8) !Pipeline {
 /// quote marks. If we ever want to process `#include`s for custom shaders
 /// then we need to write something better than this for it.
 fn loadShaderCode(comptime path: []const u8) [:0]const u8 {
-    return comptime processIncludes(@embedFile(path), std.fs.path.dirname(path).?);
+    const src = comptime processIncludes(@embedFile(path), std.fs.path.dirname(path).?);
+    // Desktop OpenGL uses the sources verbatim. Android (GLES) needs the
+    // sources rewritten to GLSL ES 3.10, which we do at comptime so the
+    // desktop path is byte-for-byte unchanged.
+    if (!gles) return src;
+    return comptime glesifyShader(src);
+}
+
+/// Rewrite a desktop GLSL shader source (core 3.30/4.30) into GLSL ES 3.10
+/// so it compiles on an OpenGL ES 3.1 context. This is a purely textual
+/// transform performed at comptime; it is only reached on Android builds.
+///
+/// The transforms:
+///  - Replace the `#version ... core` directive with `#version 310 es`
+///    plus default precision qualifiers (required in ES).
+///  - `sampler2DRect` -> `sampler2D` (rectangle textures don't exist in ES).
+///  - Atlas fetches `texture(atlas_*, coord)` -> `texelFetch(atlas_*,
+///    ivec2(coord), 0)` since the atlas is sampled in texel space.
+///  - Drop `layout(origin_upper_left) in vec4 gl_FragCoord;` (invalid in ES).
+fn glesifyShader(comptime src: [:0]const u8) [:0]const u8 {
+    comptime {
+        // The std.mem.replace passes below are branch-heavy over multi-KB
+        // sources, and this runs for every pipeline in one comptime unit, so
+        // the quota needs generous headroom.
+        @setEvalBranchQuota(100_000_000);
+
+        // NOTE: No `usampler2D`/`usampler2DRect` is present in any of these
+        //       shaders (verified), so we don't emit a usampler precision.
+        // GL_EXT_shader_io_blocks brings in/out interface blocks (used by the
+        // cell_text pipeline) to GLSL ES 3.10; they're otherwise core only in
+        // ES 3.20. #extension must appear after #version and before any code.
+        const es_header =
+            \\#version 310 es
+            \\#extension GL_EXT_shader_io_blocks : require
+            \\precision highp float;
+            \\precision highp int;
+            \\precision highp sampler2D;
+            \\
+        ;
+
+        var out: []const u8 = src;
+        out = replaceAllComptime(out, "#version 430 core\n", es_header);
+        out = replaceAllComptime(out, "#version 330 core\n", es_header);
+        out = replaceAllComptime(out, "sampler2DRect", "sampler2D");
+        out = replaceAtlasFetch(out, "atlas_grayscale");
+        out = replaceAtlasFetch(out, "atlas_color");
+        out = replaceAllComptime(
+            out,
+            "layout(origin_upper_left) in vec4 gl_FragCoord;",
+            // GLES: gl_FragCoord origin differs; vertical flip handled at blit if needed
+            "// GLES: gl_FragCoord origin differs; vertical flip handled at blit if needed",
+        );
+
+        // Re-materialize as a sentinel-terminated slice for the driver.
+        return std.fmt.comptimePrint("{s}", .{out});
+    }
+}
+
+/// Comptime `std.mem.replace` that returns a fresh slice.
+fn replaceAllComptime(
+    comptime input: []const u8,
+    comptime needle: []const u8,
+    comptime replacement: []const u8,
+) []const u8 {
+    comptime {
+        const size = std.mem.replacementSize(u8, input, needle, replacement);
+        var buf: [size]u8 = undefined;
+        _ = std.mem.replace(u8, input, needle, replacement, &buf);
+        const final = buf;
+        return &final;
+    }
+}
+
+/// Rewrite every `texture(<sampler>, <expr>)` call for the given atlas sampler
+/// into `texelFetch(<sampler>, ivec2(<expr>), 0)`. Matches the closing paren
+/// of the call so arbitrary (even nested) expressions are handled.
+fn replaceAtlasFetch(
+    comptime input: []const u8,
+    comptime sampler: []const u8,
+) []const u8 {
+    comptime {
+        const prefix = "texture(" ++ sampler ++ ",";
+        const idx = std.mem.indexOf(u8, input, prefix) orelse return input;
+
+        const expr_start = idx + prefix.len;
+        var i: usize = expr_start;
+        var depth: usize = 1;
+        while (i < input.len) : (i += 1) {
+            switch (input[i]) {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if (depth == 0) break;
+                },
+                else => {},
+            }
+        }
+
+        const expr = input[expr_start..i];
+        const rebuilt = input[0..idx] ++
+            "texelFetch(" ++ sampler ++ ", ivec2(" ++ expr ++ "), 0)" ++
+            input[i + 1 ..];
+
+        // Handle any further occurrences of the same sampler.
+        return replaceAtlasFetch(rebuilt, sampler);
+    }
 }
 
 /// Used by loadShaderCode

@@ -18,8 +18,8 @@ const uint ATLAS_COLOR = 1u;
 layout(location = 0) out vec4 out_FragColor;
 
 void main() {
-    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0;
-    bool use_linear_correction = (bools & USE_LINEAR_CORRECTION) != 0;
+    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0u;
+    bool use_linear_correction = (bools & USE_LINEAR_CORRECTION) != 0u;
 
     switch (in_data.atlas) {
         default:

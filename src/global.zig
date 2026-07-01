@@ -4,7 +4,7 @@ const build_config = @import("build_config.zig");
 const cli = @import("cli.zig");
 const internal_os = @import("os/main.zig");
 const fontconfig = @import("fontconfig");
-const glslang = @import("glslang");
+const glslang = if (builtin.target.abi.isAndroid()) struct {} else @import("glslang");
 const harfbuzz = @import("harfbuzz");
 const oni = @import("oniguruma");
 const crash = @import("crash/main.zig");
@@ -14,7 +14,14 @@ const apprt = @import("apprt.zig");
 /// We export the xev backend we want to use so that the rest of
 /// Ghostty can import this once and have access to the proper
 /// backend.
-pub const xev = @import("xev").Dynamic;
+///
+/// On Android, io_uring is blocked by the seccomp policy (probing it raises an
+/// uncatchable SIGSYS), so we pin the epoll backend instead of the dynamic one
+/// that would auto-detect io_uring first.
+pub const xev = if (builtin.target.abi.isAndroid())
+    @import("xev").Epoll
+else
+    @import("xev").Dynamic;
 
 /// Global process state. This is initialized in main() for exe artifacts
 /// and by ghostty_init() for lib artifacts. This should ONLY be used by
@@ -163,8 +170,9 @@ pub const GlobalState = struct {
         // affects a lot of behaviors in a shell.
         try internal_os.ensureLocale(self.alloc);
 
-        // Initialize glslang for shader compilation
-        try glslang.init();
+        // Initialize glslang for shader compilation. Not available on
+        // Android (custom shaders are unsupported there).
+        if (comptime !builtin.target.abi.isAndroid()) try glslang.init();
 
         // Initialize oniguruma for regex
         try oni.init(&.{oni.Encoding.utf8});

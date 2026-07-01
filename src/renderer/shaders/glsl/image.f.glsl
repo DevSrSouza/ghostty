@@ -7,7 +7,7 @@ in vec2 tex_coord;
 layout(location = 0) out vec4 out_FragColor;
 
 void main() {
-    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0;
+    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0u;
 
     vec4 rgba = texture(image, tex_coord);
 

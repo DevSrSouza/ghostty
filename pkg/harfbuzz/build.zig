@@ -108,6 +108,9 @@ fn buildLib(b: *std.Build, module: *std.Build.Module, options: anytype) !*std.Bu
     if (target.result.os.tag.isDarwin()) {
         try apple_sdk.addPaths(b, lib);
     }
+    if (target.result.abi.isAndroid()) {
+        try @import("android_ndk").addPaths(b, lib);
+    }
 
     const dynamic_link_opts = options.dynamic_link_opts;
 

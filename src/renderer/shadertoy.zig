@@ -2,8 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-const glslang = @import("glslang");
-const spvcross = @import("spirv_cross");
+const glslang = if (builtin.target.abi.isAndroid()) struct {} else @import("glslang");
+const spvcross = if (builtin.target.abi.isAndroid()) struct {} else @import("spirv_cross");
 const configpkg = @import("../config.zig");
 
 const log = std.log.scoped(.shadertoy);
@@ -157,6 +157,10 @@ pub fn spirvFromGlsl(
     errlog: ?*SpirvLog,
     src: [:0]const u8,
 ) !void {
+    // Custom shader transpilation is unavailable on Android (glslang and
+    // spirv-cross are not built there).
+    if (comptime builtin.target.abi.isAndroid()) return error.CustomShadersUnsupported;
+
     // So we can run unit tests without fear.
     if (builtin.is_test) try glslang.testing.ensureInit();
 
@@ -239,6 +243,7 @@ pub const SpirvLog = struct {
 
 /// Convert SPIR-V binary to MSL.
 pub fn mslFromSpv(alloc: Allocator, spv: []const u8) ![:0]const u8 {
+    if (comptime builtin.target.abi.isAndroid()) return error.CustomShadersUnsupported;
     const c = spvcross.c;
     return try spvCross(alloc, spvcross.c.SPVC_BACKEND_MSL, spv, (struct {
         fn setOptions(options: c.spvc_compiler_options) error{SpvcFailed}!void {
@@ -257,6 +262,7 @@ pub fn mslFromSpv(alloc: Allocator, spv: []const u8) ![:0]const u8 {
 
 /// Convert SPIR-V binary to GLSL.
 pub fn glslFromSpv(alloc: Allocator, spv: []const u8) ![:0]const u8 {
+    if (comptime builtin.target.abi.isAndroid()) return error.CustomShadersUnsupported;
     const GLSL_VERSION = 430;
 
     const c = spvcross.c;

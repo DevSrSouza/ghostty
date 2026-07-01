@@ -26,6 +26,13 @@ const log = std.log.scoped(.embedded_window);
 pub const resourcesDir = internal_os.resourcesDir;
 
 pub const App = struct {
+    /// On Android the OpenGL ES renderer requires all GL (renderer init AND
+    /// draws) to happen on a single thread — the app thread that calls
+    /// ghostty_surface_new / ghostty_surface_draw. So the renderer thread must
+    /// route draws back to the app thread instead of drawing directly. On other
+    /// embedded targets (macOS/Metal) this is false.
+    pub const must_draw_from_app_thread = builtin.target.abi.isAndroid();
+
     /// Because we only expect the embedding API to be used in embedded
     /// environments, the options are extern so that we can expose it
     /// directly to a C callconv and not pay for any translation costs.
@@ -343,6 +350,7 @@ pub const App = struct {
 pub const Platform = union(PlatformTag) {
     macos: MacOS,
     ios: IOS,
+    opengl: OpenGL,
 
     // If our build target for libghostty is not darwin then we do
     // not include macos support at all.
@@ -356,6 +364,13 @@ pub const Platform = union(PlatformTag) {
         uiview: objc.Object,
     } else void;
 
+    /// A host-provided window for an embedder that renders with OpenGL ES
+    /// (Android). The renderer creates its EGL context on this native window
+    /// (an `ANativeWindow*`) and owns all GL on the renderer thread.
+    pub const OpenGL = struct {
+        native_window: *anyopaque,
+    };
+
     // The C ABI compatible version of this union. The tag is expected
     // to be stored elsewhere.
     pub const C = extern union {
@@ -365,6 +380,10 @@ pub const Platform = union(PlatformTag) {
 
         ios: extern struct {
             uiview: ?*anyopaque,
+        },
+
+        opengl: extern struct {
+            native_window: ?*anyopaque,
         },
     };
 
@@ -385,6 +404,14 @@ pub const Platform = union(PlatformTag) {
                     break :ios error.UIViewMustBeSet);
                 break :ios .{ .ios = .{ .uiview = uiview } };
             } else error.UnsupportedPlatform,
+
+            .opengl => opengl: {
+                const config = c_platform.opengl;
+                break :opengl .{ .opengl = .{
+                    .native_window = config.native_window orelse
+                        break :opengl error.NativeWindowMustBeSet,
+                } };
+            },
         };
     }
 };
@@ -395,6 +422,7 @@ pub const PlatformTag = enum(c_int) {
 
     macos = 1,
     ios = 2,
+    opengl = 3,
 };
 
 pub const EnvVar = extern struct {
@@ -993,7 +1021,9 @@ pub const Inspector = struct {
     const cimgui = @import("dcimgui");
 
     surface: *Surface,
-    ig_ctx: *cimgui.c.ImGuiContext,
+    // cimgui is unavailable on Android; the inspector is disabled there, so
+    // this is an opaque placeholder to keep the struct layout valid.
+    ig_ctx: if (builtin.target.abi.isAndroid()) *anyopaque else *cimgui.c.ImGuiContext,
     backend: ?Backend = null,
     content_scale: f64 = 1,
 
@@ -1011,6 +1041,9 @@ pub const Inspector = struct {
     };
 
     pub fn init(surface: *Surface) !Inspector {
+        // The inspector depends on cimgui, which is unavailable on Android.
+        if (comptime builtin.target.abi.isAndroid()) return error.InspectorUnsupported;
+
         const ig_ctx = cimgui.c.ImGui_CreateContext(null) orelse return error.OutOfMemory;
         errdefer cimgui.c.ImGui_DestroyContext(ig_ctx);
         cimgui.c.ImGui_SetCurrentContext(ig_ctx);
@@ -1030,6 +1063,7 @@ pub const Inspector = struct {
     }
 
     pub fn deinit(self: *Inspector) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         self.surface.core_surface.deactivateInspector();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         if (self.backend) |v| v.deinit();
@@ -1107,6 +1141,7 @@ pub const Inspector = struct {
     }
 
     pub fn updateContentScale(self: *Inspector, x: f64, y: f64) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         _ = y;
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
 
@@ -1124,6 +1159,7 @@ pub const Inspector = struct {
     }
 
     pub fn updateSize(self: *Inspector, width: u32, height: u32) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
         io.DisplaySize = .{ .x = @floatFromInt(width), .y = @floatFromInt(height) };
@@ -1135,6 +1171,7 @@ pub const Inspector = struct {
         button: input.MouseButton,
         mods: input.Mods,
     ) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         _ = mods;
 
         self.queueRender();
@@ -1157,6 +1194,7 @@ pub const Inspector = struct {
         yoff: f64,
         mods: input.ScrollMods,
     ) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         self.queueRender();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
@@ -1173,6 +1211,7 @@ pub const Inspector = struct {
     }
 
     pub fn cursorPosCallback(self: *Inspector, x: f64, y: f64) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         self.queueRender();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
@@ -1184,6 +1223,7 @@ pub const Inspector = struct {
     }
 
     pub fn focusCallback(self: *Inspector, focused: bool) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         self.queueRender();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
@@ -1191,6 +1231,7 @@ pub const Inspector = struct {
     }
 
     pub fn textCallback(self: *Inspector, text: [:0]const u8) void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         self.queueRender();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
@@ -1203,6 +1244,7 @@ pub const Inspector = struct {
         key: input.Key,
         mods: input.Mods,
     ) !void {
+        if (comptime builtin.target.abi.isAndroid()) return;
         self.queueRender();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();

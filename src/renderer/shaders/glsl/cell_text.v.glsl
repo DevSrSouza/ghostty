@@ -43,8 +43,8 @@ layout(binding = 1, std430) readonly buffer bg_cells {
 void main() {
     uvec2 grid_size = unpack2u16(grid_size_packed_2u16);
     uvec2 cursor_pos = unpack2u16(cursor_pos_packed_2u16);
-    bool cursor_wide = (bools & CURSOR_WIDE) != 0;
-    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0;
+    bool cursor_wide = (bools & CURSOR_WIDE) != 0u;
+    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0u;
 
     // Convert the grid x, y into world space x, y by accounting for cell size
     vec2 cell_pos = cell_size * vec2(grid_pos);
@@ -130,17 +130,17 @@ void main() {
     // If we have a minimum contrast, we need to check if we need to
     // change the color of the text to ensure it has enough contrast
     // with the background.
-    if (min_contrast > 1.0f && (glyph_bools & NO_MIN_CONTRAST) == 0) {
+    if (min_contrast > 1.0f && (glyph_bools & NO_MIN_CONTRAST) == 0u) {
         // Ensure our minimum contrast
         out_data.color = contrasted_color(min_contrast, out_data.color, out_data.bg_color);
     }
 
     // Check if current position is under cursor (including wide cursor)
-    bool is_cursor_pos = ((grid_pos.x == cursor_pos.x) || (cursor_wide && (grid_pos.x == (cursor_pos.x + 1)))) && (grid_pos.y == cursor_pos.y);
+    bool is_cursor_pos = ((grid_pos.x == cursor_pos.x) || (cursor_wide && (grid_pos.x == (cursor_pos.x + 1u)))) && (grid_pos.y == cursor_pos.y);
 
     // If this cell is the cursor cell, but we're not processing
     // the cursor glyph itself, then we need to change the color.
-    if ((glyph_bools & IS_CURSOR_GLYPH) == 0 && is_cursor_pos) {
+    if ((glyph_bools & IS_CURSOR_GLYPH) == 0u && is_cursor_pos) {
         out_data.color = load_color(unpack4u8(cursor_color_packed_4u8), use_linear_blending);
     }
 }

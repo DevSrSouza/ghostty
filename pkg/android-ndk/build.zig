@@ -27,6 +27,11 @@ pub fn addPaths(b: *std.Build, step: *std.Build.Step.Compile) !void {
             libc: std.Build.LazyPath,
             cpp_include: std.Build.LazyPath,
             lib: std.Build.LazyPath,
+            // The API-level-versioned lib dir. This is where the system
+            // shared libraries (libEGL.so, libandroid.so, ...) live, so it
+            // must be on the linker search path for `linkSystemLibrary` to
+            // resolve them (the unversioned `lib` dir doesn't contain them).
+            lib_versioned: std.Build.LazyPath,
         }) = .empty;
     };
 
@@ -106,6 +111,7 @@ pub fn addPaths(b: *std.Build, step: *std.Build.Step.Compile) !void {
             .libc = libc_path,
             .cpp_include = .{ .cwd_relative = cpp_include },
             .lib = .{ .cwd_relative = lib },
+            .lib_versioned = .{ .cwd_relative = c_runtime_dir },
         };
     }
 
@@ -114,6 +120,7 @@ pub fn addPaths(b: *std.Build, step: *std.Build.Step.Compile) !void {
     step.setLibCFile(value.libc);
     step.root_module.addSystemIncludePath(value.cpp_include);
     step.root_module.addLibraryPath(value.lib);
+    step.root_module.addLibraryPath(value.lib_versioned);
 }
 
 fn findNDKPath(b: *std.Build) ?[]const u8 {

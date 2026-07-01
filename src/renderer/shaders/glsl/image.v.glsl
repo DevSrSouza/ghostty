@@ -36,7 +36,7 @@ void main() {
     tex_coord += source_rect.zw * corner;
 
     // Normalize the coordinates.
-    tex_coord /= textureSize(image, 0);
+    tex_coord /= vec2(textureSize(image, 0));
 
     // The position of our image starts at the top-left of the grid cell and
     // adds the source rect width/height components.

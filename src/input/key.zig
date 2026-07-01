@@ -544,6 +544,8 @@ pub const Key = enum(c_int) {
 
     /// Returns the cimgui key constant for this key.
     pub fn imguiKey(self: Key) ?c_int {
+        // cimgui (the inspector) is not available on Android.
+        if (comptime builtin.target.abi.isAndroid()) return null;
         return switch (self) {
             .key_a => cimgui.c.ImGuiKey_A,
             .key_b => cimgui.c.ImGuiKey_B,

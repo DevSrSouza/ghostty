@@ -39,6 +39,12 @@ pub fn initStatic(
     lib.bundle_compiler_rt = true;
     lib.bundle_ubsan_rt = true;
 
+    if (lib.rootModuleTarget().abi.isAndroid()) {
+        // Support 16kb page sizes, required for Android 15+.
+        lib.link_z_max_page_size = 16384; // 16kb
+        try @import("android_ndk").addPaths(b, lib);
+    }
+
     // Add our dependencies. Get the list of all static deps so we can
     // build a combined archive if necessary.
     var lib_list = try deps.add(lib);
@@ -87,6 +93,12 @@ pub fn initShared(
         .use_llvm = true,
     });
     _ = try deps.add(lib);
+
+    if (lib.rootModuleTarget().abi.isAndroid()) {
+        // Support 16kb page sizes, required for Android 15+.
+        lib.link_z_max_page_size = 16384; // 16kb
+        try @import("android_ndk").addPaths(b, lib);
+    }
 
     // Get our debug symbols
     const dsymutil: ?std.Build.LazyPath = dsymutil: {

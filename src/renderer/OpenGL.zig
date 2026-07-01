@@ -33,9 +33,46 @@ pub const swap_chain_count = 1;
 
 const log = std.log.scoped(.opengl);
 
-/// We require at least OpenGL 4.3
-pub const MIN_VERSION_MAJOR = 4;
-pub const MIN_VERSION_MINOR = 3;
+/// True when targeting Android, where we render on an OpenGL ES 3.1 context
+/// created via EGL on the renderer thread rather than a desktop GL context
+/// provided by the windowing system. Every GLES-specific branch below is
+/// gated on this comptime flag so the desktop path is byte-for-byte unchanged.
+const gles = builtin.target.abi.isAndroid();
+
+/// EGL bindings, only analyzed on Android. On desktop this is an empty struct
+/// so none of the EGL code below is semantically analyzed.
+const egl = if (gles) @cImport({
+    @cInclude("EGL/egl.h");
+}) else struct {};
+
+const androidlog = if (gles) @cImport({
+    @cInclude("android/log.h");
+}) else struct {};
+
+/// Log an EGL failure to logcat (Android stderr isn't captured there).
+fn eglLog(comptime what: []const u8) void {
+    if (comptime !gles) return;
+    var buf: [160]u8 = undefined;
+    const msg = std.fmt.bufPrintZ(
+        &buf,
+        "eglThreadEnter: {s} failed (eglGetError=0x{x})",
+        .{ what, egl.eglGetError() },
+    ) catch return;
+    _ = androidlog.__android_log_write(androidlog.ANDROID_LOG_ERROR, "GhosttyGL", msg.ptr);
+}
+
+/// The per-thread EGL state owned by the renderer thread on Android. Mirrors
+/// how `gl.glad.context` is stored threadlocal.
+const EglState = if (gles) struct {
+    display: egl.EGLDisplay,
+    surface: egl.EGLSurface,
+    context: egl.EGLContext,
+} else void;
+threadlocal var egl_state: EglState = undefined;
+
+/// We require at least OpenGL 4.3 on desktop, or OpenGL ES 3.1 on Android.
+pub const MIN_VERSION_MAJOR = if (gles) 3 else 4;
+pub const MIN_VERSION_MINOR = if (gles) 1 else 3;
 
 alloc: std.mem.Allocator,
 
@@ -148,32 +185,48 @@ fn prepareContext(getProcAddress: anytype) !void {
         return error.OpenGLOutdated;
     }
 
-    // Enable debug output for the context.
-    try gl.enable(gl.c.GL_DEBUG_OUTPUT);
+    // The desktop glad loader keys function availability off the *desktop* GL
+    // version. Several functions are core in GLES 3.1 but desktop GL 4.3
+    // (ARB_vertex_attrib_binding), so glad leaves them null for a context it
+    // reads as "3.1". Load them explicitly from EGL.
+    if (comptime gles) {
+        const ctx = &gl.glad.context;
+        ctx.VertexAttribBinding = @ptrCast(egl.eglGetProcAddress("glVertexAttribBinding"));
+        ctx.VertexAttribFormat = @ptrCast(egl.eglGetProcAddress("glVertexAttribFormat"));
+        ctx.VertexAttribIFormat = @ptrCast(egl.eglGetProcAddress("glVertexAttribIFormat"));
+        ctx.BindVertexBuffer = @ptrCast(egl.eglGetProcAddress("glBindVertexBuffer"));
+        ctx.VertexBindingDivisor = @ptrCast(egl.eglGetProcAddress("glVertexBindingDivisor"));
+    }
 
-    // Register our debug message callback with the OpenGL context.
-    gl.glad.context.DebugMessageCallback.?(glDebugMessageCallback, null);
+    // OpenGL ES core has no GL_DEBUG_OUTPUT, DebugMessageCallback, or
+    // GL_FRAMEBUFFER_SRGB, so we skip all of them on Android. On ES the
+    // default framebuffer's sRGB encoding is controlled by the EGL config
+    // instead.
+    if (!gles) {
+        // Enable debug output for the context.
+        try gl.enable(gl.c.GL_DEBUG_OUTPUT);
 
-    // Enable SRGB framebuffer for linear blending support.
-    try gl.enable(gl.c.GL_FRAMEBUFFER_SRGB);
+        // Register our debug message callback with the OpenGL context.
+        gl.glad.context.DebugMessageCallback.?(glDebugMessageCallback, null);
+
+        // Enable SRGB framebuffer for linear blending support.
+        try gl.enable(gl.c.GL_FRAMEBUFFER_SRGB);
+    }
 }
 
 /// This is called early right after surface creation.
 pub fn surfaceInit(surface: *apprt.Surface) !void {
-    _ = surface;
-
     switch (apprt.runtime) {
         else => @compileError("unsupported app runtime for OpenGL"),
 
         // GTK uses global OpenGL context so we load from null.
-        apprt.gtk,
-        => try prepareContext(null),
+        apprt.gtk => try prepareContext(null),
 
-        apprt.embedded => {
-            // TODO(mitchellh): this does nothing today to allow libghostty
-            // to compile for OpenGL targets but libghostty is strictly
-            // broken for rendering on this platforms.
-        },
+        // On Android the renderer's GL objects are created on the thread that
+        // calls ghostty_surface_new (right after this). Bring up + make current
+        // the EGL context HERE, before any GL calls. All subsequent GL (incl.
+        // draws, via `must_draw_from_app_thread`) runs on this same thread.
+        apprt.embedded => if (comptime gles) try eglThreadEnter(surface),
     }
 
     // These are very noisy so this is commented, but easy to uncomment
@@ -206,14 +259,102 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             // tell, so we use the renderer thread to setup all the state
             // but then do the actual draws and texture syncs and all that
             // on the main thread. As such, we don't do anything here.
+            //
+            // NOTE: `surface` is considered used via the `eglThreadEnter`
+            // call in the embedded branch below (the unused-parameter check
+            // is lexical over the whole body), so no discard is needed here.
         },
 
         apprt.embedded => {
-            // TODO(mitchellh): this does nothing today to allow libghostty
-            // to compile for OpenGL targets but libghostty is strictly
-            // broken for rendering on this platforms.
+            // The EGL context is created + made current in `surfaceInit` on the
+            // app thread (which owns all GL for the OpenGL backend via
+            // `must_draw_from_app_thread`). The renderer thread does no GL, so
+            // there is nothing to do here.
         },
     }
+}
+
+/// Bring up the EGL context on the current (renderer) thread for Android.
+fn eglThreadEnter(surface: *apprt.Surface) !void {
+    const display = egl.eglGetDisplay(egl.EGL_DEFAULT_DISPLAY);
+    if (display == egl.EGL_NO_DISPLAY) {
+        eglLog("eglGetDisplay");
+        return error.EGLNoDisplay;
+    }
+    if (egl.eglInitialize(display, null, null) == egl.EGL_FALSE) {
+        eglLog("eglInitialize");
+        return error.EGLInitializeFailed;
+    }
+    errdefer _ = egl.eglTerminate(display);
+
+    const config_attribs = [_]egl.EGLint{
+        egl.EGL_RENDERABLE_TYPE, egl.EGL_OPENGL_ES3_BIT,
+        egl.EGL_SURFACE_TYPE,    egl.EGL_WINDOW_BIT,
+        egl.EGL_RED_SIZE,        8,
+        egl.EGL_GREEN_SIZE,      8,
+        egl.EGL_BLUE_SIZE,       8,
+        egl.EGL_ALPHA_SIZE,      8,
+        egl.EGL_NONE,
+    };
+    var config: egl.EGLConfig = undefined;
+    var num_config: egl.EGLint = 0;
+    if (egl.eglChooseConfig(
+        display,
+        &config_attribs,
+        &config,
+        1,
+        &num_config,
+    ) == egl.EGL_FALSE or num_config < 1) {
+        eglLog("eglChooseConfig(ES3)");
+        return error.EGLChooseConfigFailed;
+    }
+
+    const context_attribs = [_]egl.EGLint{
+        egl.EGL_CONTEXT_MAJOR_VERSION, 3,
+        egl.EGL_CONTEXT_MINOR_VERSION, 1,
+        egl.EGL_NONE,
+    };
+    const context = egl.eglCreateContext(
+        display,
+        config,
+        egl.EGL_NO_CONTEXT,
+        &context_attribs,
+    );
+    if (context == egl.EGL_NO_CONTEXT) {
+        // Ghostty's renderer requires GLES 3.1 (SSBOs). A device that only
+        // supports GLES 3.0 fails here.
+        eglLog("eglCreateContext(3.1)");
+        return error.EGLCreateContextFailed;
+    }
+    errdefer _ = egl.eglDestroyContext(display, context);
+
+    const window: egl.EGLNativeWindowType =
+        @ptrCast(surface.platform.opengl.native_window);
+    const surf = egl.eglCreateWindowSurface(display, config, window, null);
+    if (surf == egl.EGL_NO_SURFACE) {
+        eglLog("eglCreateWindowSurface");
+        return error.EGLCreateWindowSurfaceFailed;
+    }
+    errdefer _ = egl.eglDestroySurface(display, surf);
+
+    if (egl.eglMakeCurrent(display, surf, surf, context) == egl.EGL_FALSE) {
+        eglLog("eglMakeCurrent");
+        return error.EGLMakeCurrentFailed;
+    }
+
+    // Pass a function *pointer* (glad.load @ptrCasts it); a bare function
+    // value isn't a pointer and won't compile.
+    prepareContext(&egl.eglGetProcAddress) catch |err| {
+        eglLog("prepareContext");
+        return err;
+    };
+
+    egl_state = .{
+        .display = display,
+        .surface = surf,
+        .context = context,
+    };
+    _ = androidlog.__android_log_write(androidlog.ANDROID_LOG_INFO, "GhosttyGL", "eglThreadEnter: GLES 3.1 context current, renderer up");
 }
 
 /// Callback called by renderer.Thread when it exits.
@@ -229,7 +370,10 @@ pub fn threadExit(self: *const OpenGL) void {
         },
 
         apprt.embedded => {
-            // TODO: see threadEnter
+            // The EGL context lives on the app/GL thread (created in
+            // surfaceInit), not this renderer thread, so `egl_state` is not
+            // valid here — nothing to tear down. The context is released when
+            // the app thread's surface is torn down.
         },
     }
 }
@@ -303,9 +447,14 @@ pub fn present(self: *OpenGL, target: Target) !void {
     // values may be linearized as they're copied, but even though the draw
     // framebuffer has a linear internal format, the values in it should be
     // sRGB, not linear!
-    try gl.disable(gl.c.GL_FRAMEBUFFER_SRGB);
-    defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
-        log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+    //
+    // GL_FRAMEBUFFER_SRGB doesn't exist in OpenGL ES core, so on Android we
+    // skip toggling it entirely.
+    if (!gles) try gl.disable(gl.c.GL_FRAMEBUFFER_SRGB);
+    defer if (!gles) {
+        gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
+            log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+        };
     };
 
     // Bind the target for reading.
@@ -325,6 +474,10 @@ pub fn present(self: *OpenGL, target: Target) !void {
         gl.c.GL_COLOR_BUFFER_BIT,
         gl.c.GL_NEAREST,
     );
+
+    // On Android there is no external swapper (like GTK); we own the EGL
+    // surface, so present the frame ourselves.
+    if (gles) _ = egl.eglSwapBuffers(egl_state.display, egl_state.surface);
 
     // Keep track of this target in case we need to repeat it.
     self.last_target = target;
@@ -389,7 +542,9 @@ pub const ImageTextureFormat = enum {
         return switch (self) {
             .gray => .red,
             .rgba => .rgba,
-            .bgra => .bgra,
+            // ES has no BGRA upload format; upload the bytes as RGBA (a
+            // known R/B channel swap for BGRA image sources on Android).
+            .bgra => if (gles) .rgba else .bgra,
         };
     }
 };
@@ -424,10 +579,16 @@ pub fn initAtlasTexture(
     atlas: *const font.Atlas,
 ) Texture.Error!Texture {
     _ = self;
+    // ES has no rectangle textures (GL_TEXTURE_RECTANGLE), and no BGRA
+    // upload format or sized-less GL_RED internal format, so on Android we
+    // use a normal 2D texture with `r8`/`red` for the grayscale atlas and
+    // `rgba`/`srgba` for the color atlas (uploaded as RGBA; see the R/B
+    // swap note above). The shader transform rewrites the atlas fetch to
+    // texelFetch so texel coordinates still work with a 2D texture.
     const format: gl.Texture.Format, const internal_format: gl.Texture.InternalFormat =
         switch (atlas.format) {
-            .grayscale => .{ .red, .red },
-            .bgra => .{ .bgra, .srgba },
+            .grayscale => if (gles) .{ .red, .r8 } else .{ .red, .red },
+            .bgra => if (gles) .{ .rgba, .srgba } else .{ .bgra, .srgba },
             else => @panic("unsupported atlas format for OpenGL texture"),
         };
 
@@ -435,7 +596,7 @@ pub fn initAtlasTexture(
         .{
             .format = format,
             .internal_format = internal_format,
-            .target = .Rectangle,
+            .target = if (gles) .@"2D" else .Rectangle,
             .min_filter = .nearest,
             .mag_filter = .nearest,
             .wrap_s = .clamp_to_edge,

@@ -15,7 +15,7 @@ flat in uint repeat;
 layout(location = 0) out vec4 out_FragColor;
 
 void main() {
-    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0;
+    bool use_linear_blending = (bools & USE_LINEAR_BLENDING) != 0u;
 
     // Our texture coordinate is based on the screen position, offset by the
     // dest rect origin, and scaled by the ratio between the dest rect size
@@ -23,10 +23,10 @@ void main() {
     // size of the texture to the dest rect size.
     vec2 tex_coord = (gl_FragCoord.xy - offset) * scale;
 
-    vec2 tex_size = textureSize(image, 0);
+    vec2 tex_size = vec2(textureSize(image, 0));
 
     // If we need to repeat the texture, wrap the coordinates.
-    if (repeat != 0) {
+    if (repeat != 0u) {
         tex_coord = mod(mod(tex_coord, tex_size) + tex_size, tex_size);
     }
 
