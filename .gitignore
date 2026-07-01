@@ -10,6 +10,8 @@
 zig-cache/
 .zig-cache/
 zig-out/
+# Android cross-compile prefixes produced by scripts/build-native.sh
+zig-out-android-*/
 /build.zig.zon.bak
 /result*
 /.nixos-test-history
