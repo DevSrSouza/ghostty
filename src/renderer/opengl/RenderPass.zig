@@ -2,6 +2,7 @@
 const Self = @This();
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const gl = @import("opengl");
 
@@ -80,6 +81,19 @@ pub fn step(self: *Self, s: Step) void {
         },
     };
     defer fbobind.unbind();
+
+    // The viewport must match the attachment size for the projection to map
+    // NDC onto the full target (Metal does this implicitly per render pass).
+    // On desktop the windowing toolkit maintains the viewport across window
+    // resizes; on Android nothing does — it would stay at the EGL surface's
+    // creation size and stretch/clip every draw after a surface resize.
+    if (comptime builtin.target.abi.isAndroid()) {
+        const width: usize, const height: usize = switch (self.attachments[0].target) {
+            .target => |t| .{ t.width, t.height },
+            .texture => |t| .{ t.width, t.height },
+        };
+        gl.viewport(0, 0, @intCast(width), @intCast(height)) catch return;
+    }
 
     defer self.step_number += 1;
 

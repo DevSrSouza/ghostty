@@ -49,6 +49,10 @@ const androidlog = if (gles) @cImport({
     @cInclude("android/log.h");
 }) else struct {};
 
+const anw = if (gles) @cImport({
+    @cInclude("android/native_window.h");
+}) else struct {};
+
 /// Log an EGL failure to logcat (Android stderr isn't captured there).
 fn eglLog(comptime what: []const u8) void {
     if (comptime !gles) return;
@@ -67,6 +71,7 @@ const EglState = if (gles) struct {
     display: egl.EGLDisplay,
     surface: egl.EGLSurface,
     context: egl.EGLContext,
+    window: ?*anyopaque,
 } else void;
 threadlocal var egl_state: EglState = undefined;
 
@@ -358,6 +363,7 @@ fn eglThreadEnter(surface: *apprt.Surface) !void {
         .display = display,
         .surface = surf,
         .context = context,
+        .window = @ptrCast(window),
     };
     _ = androidlog.__android_log_write(androidlog.ANDROID_LOG_INFO, "GhosttyGL", "eglThreadEnter: GLES 3.1 context current, renderer up");
 }
@@ -425,8 +431,30 @@ pub fn initShaders(
 }
 
 /// Get the current size of the runtime surface.
+///
+/// On desktop the windowing toolkit keeps GL_VIEWPORT in sync with the window
+/// on every resize, so reading it back yields the current surface size. On
+/// Android nothing maintains the viewport, so GL_VIEWPORT would stay at the
+/// EGL surface's creation size forever; the ANativeWindow geometry is the
+/// authoritative, immediately-updated size there (eglQuerySurface only
+/// reflects a resize one buffer-swap later).
 pub fn surfaceSize(self: *const OpenGL) !struct { width: u32, height: u32 } {
     _ = self;
+
+    if (comptime gles) {
+        const win: ?*anw.ANativeWindow = @ptrCast(egl_state.window);
+        const w = anw.ANativeWindow_getWidth(win);
+        const h = anw.ANativeWindow_getHeight(win);
+        if (w > 0 and h > 0) return .{ .width = @intCast(w), .height = @intCast(h) };
+
+        // Window query failed — fall back to the EGL surface.
+        var ew: egl.EGLint = 0;
+        var eh: egl.EGLint = 0;
+        _ = egl.eglQuerySurface(egl_state.display, egl_state.surface, egl.EGL_WIDTH, &ew);
+        _ = egl.eglQuerySurface(egl_state.display, egl_state.surface, egl.EGL_HEIGHT, &eh);
+        return .{ .width = @intCast(ew), .height = @intCast(eh) };
+    }
+
     var viewport: [4]gl.c.GLint = undefined;
     gl.glad.context.GetIntegerv.?(gl.c.GL_VIEWPORT, &viewport);
     return .{
