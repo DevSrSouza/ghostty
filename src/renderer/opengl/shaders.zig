@@ -367,7 +367,11 @@ fn loadShaderCode(comptime path: []const u8) [:0]const u8 {
 ///  - `sampler2DRect` -> `sampler2D` (rectangle textures don't exist in ES).
 ///  - Atlas fetches `texture(atlas_*, coord)` -> `texelFetch(atlas_*,
 ///    ivec2(coord), 0)` since the atlas is sampled in texel space.
-///  - Drop `layout(origin_upper_left) in vec4 gl_FragCoord;` (invalid in ES).
+///  - `layout(origin_upper_left) in vec4 gl_FragCoord;` is invalid in ES and
+///    ES has no equivalent: gl_FragCoord is always bottom-left origin. Shaders
+///    that declared it index cells/textures top-down from gl_FragCoord, so
+///    every `gl_FragCoord.xy` use is rewritten to flip Y via `screen_size`
+///    (from the Globals UBO; the render target is always screen_size-sized).
 fn glesifyShader(comptime src: [:0]const u8) [:0]const u8 {
     comptime {
         // The std.mem.replace passes below are branch-heavy over multi-KB
@@ -395,12 +399,24 @@ fn glesifyShader(comptime src: [:0]const u8) [:0]const u8 {
         out = replaceAllComptime(out, "sampler2DRect", "sampler2D");
         out = replaceAtlasFetch(out, "atlas_grayscale");
         out = replaceAtlasFetch(out, "atlas_color");
-        out = replaceAllComptime(
-            out,
-            "layout(origin_upper_left) in vec4 gl_FragCoord;",
-            // GLES: gl_FragCoord origin differs; vertical flip handled at blit if needed
-            "// GLES: gl_FragCoord origin differs; vertical flip handled at blit if needed",
-        );
+        const origin_decl = "layout(origin_upper_left) in vec4 gl_FragCoord;";
+        if (std.mem.indexOf(u8, out, origin_decl) != null) {
+            out = replaceAllComptime(
+                out,
+                origin_decl,
+                "// GLES: no origin_upper_left; gl_FragCoord.xy uses are Y-flipped below",
+            );
+            // The flip only rewrites `.xy` swizzles; any other access to
+            // gl_FragCoord would silently keep the wrong origin.
+            if (std.mem.count(u8, out, "gl_FragCoord") !=
+                std.mem.count(u8, out, "gl_FragCoord.xy"))
+                @compileError("origin_upper_left shader accesses gl_FragCoord other than via .xy; extend the GLES flip");
+            out = replaceAllComptime(
+                out,
+                "gl_FragCoord.xy",
+                "vec2(gl_FragCoord.x, screen_size.y - gl_FragCoord.y)",
+            );
+        }
 
         // Re-materialize as a sentinel-terminated slice for the driver.
         return std.fmt.comptimePrint("{s}", .{out});
