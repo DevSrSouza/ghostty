@@ -48,8 +48,14 @@ vec4 cell_bg() {
     }
 
     // Load the color for the cell.
+    //
+    // The load lands in a local before the call: Mali's GLSL front-end keeps
+    // the SSBO's `readonly` on the loaded expression and rejects passing it to
+    // an unqualified parameter ("discards 'readonly' access qualifier"), even
+    // though the read already yields a plain value.
+    uint packed_color = cells[grid_pos.y * int(grid_size.x) + grid_pos.x];
     vec4 cell_color = load_color(
-            unpack4u8(cells[grid_pos.y * int(grid_size.x) + grid_pos.x]),
+            unpack4u8(packed_color),
             use_linear_blending
         );
 
